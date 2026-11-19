@@ -1,0 +1,63 @@
+# 默认文本文件使用 LF
+* text=auto eol=lf
+
+# Maven Wrapper
+mvnw text eol=lf
+mvnw.cmd text eol=crlf
+
+# Windows 脚本保持 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Shell 脚本保持 LF
+*.sh text eol=lf
+
+# 常见源码和配置
+*.java text eol=lf
+*.xml text eol=lf
+*.properties text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.sql text eol=lf
+
+# 图片和字体
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg text eol=lf
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+
+# 文档和归档
+*.pdf binary
+*.doc binary
+*.docx binary
+*.xls binary
+*.xlsx binary
+*.ppt binary
+*.pptx binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.tgz binary
+*.rar binary
+*.7z binary
+
+# 构建产物和可执行文件
+*.jar binary
+*.war binary
+*.ear binary
+*.nar binary
+*.class binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
