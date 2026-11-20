@@ -3,6 +3,7 @@ use std::{
     fs,
     path::{Component, Path, PathBuf},
     sync::Mutex,
+    time::UNIX_EPOCH,
 };
 
 use tauri::{AppHandle, Manager, State, Url, http, ipc::Response};
@@ -12,6 +13,7 @@ use tauri_plugin_dialog::DialogExt;
 pub struct ModelAccess {
     models: Mutex<HashSet<PathBuf>>,
     folders: Mutex<HashSet<PathBuf>>,
+    recent_lock: Mutex<()>,
 }
 
 pub fn supports_model(path: &Path) -> bool {
@@ -103,6 +105,114 @@ pub async fn read_model(access: State<'_, ModelAccess>, path: PathBuf) -> Result
     Ok(Response::new(bytes))
 }
 
+#[tauri::command]
+pub async fn model_stamp(access: State<'_, ModelAccess>, path: PathBuf) -> Result<String, String> {
+    let path = access.model_path(&path).ok_or("文件暂时不可读")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
+        let time = metadata
+            .modified()
+            .map_err(|e| e.to_string())?
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| e.to_string())?;
+        Ok(format!("{}:{}", metadata.len(), time.as_nanos()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn recent_file(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("recent-models.json"))
+}
+
+fn read_recents(file: &Path) -> Vec<PathBuf> {
+    fs::read(file)
+        .ok()
+        .and_then(|data| serde_json::from_slice(&data).ok())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn recent_models(
+    app: AppHandle,
+    access: State<'_, ModelAccess>,
+) -> Result<Vec<PathBuf>, String> {
+    let _lock = access.recent_lock.lock().unwrap();
+    Ok(read_recents(&recent_file(&app)?))
+}
+
+#[tauri::command]
+pub fn remember_model(
+    app: AppHandle,
+    access: State<'_, ModelAccess>,
+    path: PathBuf,
+) -> Result<Vec<PathBuf>, String> {
+    let canonical = access.model_path(&path).ok_or("无法记录未授权模型")?;
+    let _lock = access.recent_lock.lock().unwrap();
+    let file = recent_file(&app)?;
+    let mut recent = read_recents(&file);
+    recent.retain(|entry| {
+        entry != &path && fs::canonicalize(entry).ok().as_ref() != Some(&canonical)
+    });
+    recent.insert(0, path);
+    recent.truncate(10);
+    fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
+    let staged = file.with_extension("tmp");
+    fs::write(
+        &staged,
+        serde_json::to_vec(&recent).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    fs::rename(staged, file).map_err(|e| e.to_string())?;
+    Ok(recent)
+}
+
+#[tauri::command]
+pub fn authorize_recent(
+    app: AppHandle,
+    access: State<'_, ModelAccess>,
+    path: PathBuf,
+) -> Result<(), String> {
+    let _lock = access.recent_lock.lock().unwrap();
+    if !read_recents(&recent_file(&app)?).contains(&path) {
+        return Err("该路径不在最近打开记录中".into());
+    }
+    access.allow_model(&path);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn save_screenshot(
+    app: AppHandle,
+    name: String,
+    png: Vec<u8>,
+) -> Result<Option<PathBuf>, String> {
+    if !png.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("截图不是有效的 PNG 数据".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let selection = app
+            .dialog()
+            .file()
+            .set_title("保存视口截图")
+            .set_file_name(name)
+            .add_filter("PNG", &["png"])
+            .blocking_save_file();
+        let Some(path) = selection else {
+            return Ok(None);
+        };
+        let path = path.into_path().map_err(|e| e.to_string())?;
+        fs::write(&path, png).map_err(|e| e.to_string())?;
+        Ok(Some(path))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 fn find_resource(access: &ModelAccess, url: &Url) -> Option<(Vec<u8>, &'static str)> {
     let mut query = url.query_pairs();
     let model = query.find(|(key, _)| key == "model")?.1;
@@ -129,6 +239,7 @@ fn find_resource(access: &ModelAccess, url: &Url) -> Option<(Vec<u8>, &'static s
         "gif" => "image/gif",
         "bmp" => "image/bmp",
         "avif" => "image/avif",
+        "ktx2" => "image/ktx2",
         "tga" | "bin" => "application/octet-stream",
         _ => return None,
     };

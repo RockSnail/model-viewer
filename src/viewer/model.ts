@@ -1,10 +1,12 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { LoadingManager, Mesh, Skeleton, Texture, type AnimationClip, type Material, type Object3D } from "three";
+import type { Renderer } from "./renderer";
 
 export type Model = {
   root: Object3D;
   animations: AnimationClip[];
   missingTextures: string[];
+  bytes: number;
   dispose: () => void;
 };
 
@@ -16,7 +18,7 @@ export function isModelPath(path: string) {
   return /\.(glb|fbx)$/i.test(path);
 }
 
-export async function loadModel(path: string, folder?: string): Promise<Model> {
+export async function loadModel(path: string, renderer: Renderer, folder?: string): Promise<Model> {
   let bytes: ArrayBuffer;
   try {
     bytes = await invoke<ArrayBuffer>("read_model", { path });
@@ -64,8 +66,8 @@ export async function loadModel(path: string, folder?: string): Promise<Model> {
       animations = root.animations;
       scenes = [root];
     } else {
-      const { GLTFLoader } = await import("three/addons/loaders/GLTFLoader.js");
-      const gltf = await new GLTFLoader(manager).parseAsync(bytes, "");
+      const { decodeGLB } = await import("./compressed");
+      const gltf = await decodeGLB(bytes, manager, renderer);
       root = gltf.scene;
       animations = gltf.animations;
       scenes = gltf.scenes;
@@ -78,7 +80,7 @@ export async function loadModel(path: string, folder?: string): Promise<Model> {
     for (const url of blobUrls) URL.revokeObjectURL(url);
   }
 
-  return { root, animations, missingTextures: [...missing], dispose: () => disposeScenes(scenes) };
+  return { root, animations, missingTextures: [...missing], bytes: bytes.byteLength, dispose: () => disposeScenes(scenes) };
 }
 
 function disposeScenes(scenes: Object3D[]) {
